@@ -289,7 +289,7 @@ void display_gantt(int *gantt, int gant_len) {
     
     int start = 0;
 
-    printf("Gantt Chart:\n");
+    printf("\nGantt Chart:\n");
 
     for (int i = 0; i < gant_len; ++i) {
         printf("===");
@@ -684,8 +684,10 @@ void copy_pinfo(pinfo* src, pinfo* dest) {
     memcpy(dest, src, sizeof(pinfo));
 }
 
+
 void rr(pinfo** pinfos, int pinfos_len, int quant) {
     queue ready = {NULL, NULL};
+    queue wait = {NULL, NULL};
     int run_process = NO_PROCESS;
     int time = 0;
     int context_switches = 0;
@@ -693,6 +695,7 @@ void rr(pinfo** pinfos, int pinfos_len, int quant) {
     int gantt[100]; 
     int gant_len = 0;
     int tq_expired = 0;
+    int do_wait = 0;
 
     set_ready_queue(pinfos, pinfos_len, time, &ready, method);
 
@@ -705,16 +708,23 @@ void rr(pinfo** pinfos, int pinfos_len, int quant) {
                 set_ready_queue(pinfos, pinfos_len, time, &ready, method);
                 gantt[gant_len] = NO_PROCESS;
                 ++(gant_len);
+                wait_process_ad_update_structs(run_process, pinfos, &ready, &wait);
+
             }
             
         }
         if (has_process_finished(pinfos, run_process)) {
+            if (tq_expired) { //process가 끝나서 다음 process 고르는 과정과 tq 끝나서 고르는거 겹치는 거 방지
+                tq_expired = 0;   
+            }
             run_process = dequeue(&ready);
             if (run_process==NO_PROCESS) {
                 time++;
                 set_ready_queue(pinfos, pinfos_len, time, &ready, method);
                 gantt[gant_len] = NO_PROCESS;
                 ++(gant_len);
+                wait_process_ad_update_structs(run_process, pinfos, &ready, &wait);
+
             }
             else {
             //printf("Context switch from one process to another\n");
@@ -730,6 +740,21 @@ void rr(pinfo** pinfos, int pinfos_len, int quant) {
             tq_expired = 0;
         }
 
+        if (do_wait) {  //i/o wait 발생. 현재 프로세스는 wait queue에 넣고. ready큐에서 run할 프로세스 가져오기
+            //printf("Context switch from one process to another\n");
+            enqueue(&wait, run_process);
+            run_process = dequeue(&ready);
+            if (run_process == NO_PROCESS ) {
+                ++time;
+                set_ready_queue(pinfos, pinfos_len, time, &ready, method);
+                gantt[gant_len] = NO_PROCESS;
+                ++(gant_len);
+                wait_process_ad_update_structs(run_process, pinfos, &ready, &wait);
+
+            }
+            do_wait = 0;
+        }
+
         if(run_process != NO_PROCESS) {
             int how_much_left_after_tq = pinfos[run_process]->how_much_left - quant;
             while (pinfos[run_process]->how_much_left) {
@@ -738,11 +763,14 @@ void rr(pinfo** pinfos, int pinfos_len, int quant) {
                 run_process_ad_update_structs(run_process, pinfos, pinfos_len, &time, gantt, &gant_len);
                 set_ready_queue(pinfos, pinfos_len, time, &ready, method);
 
+                wait_process_ad_update_structs(run_process, pinfos, &ready, &wait);
+
                 if (pinfos[run_process]->how_much_left == how_much_left_after_tq) { //  time quantum 만큼 다 돌았으면 다음 process로 변경
                     tq_expired = 1;
                     break;
                 }
-                
+                do_wait = need_io(pinfos, run_process, time);
+                if (do_wait) break;
             }
         }
 
@@ -828,7 +856,7 @@ void rr_prior(pinfo** pinfos, int pinfos_len, int quant) {
 }
 
 double hrr_ratio(int waiting_t, int burst_t) {
-    return (double) (waiting_t + burst_t) / burst_t;
+    return (double) (waiting_t + burst_t) / burst_t;  // (W+S) / S
 }
 
 void order_hrr(pinfo **pinfos, queue *q) {
@@ -967,10 +995,10 @@ int main() {
         }
     }
 
-    printf("Enter whether I/O Burst or not: \n");
+    printf("Enter whether I/O Burst or not (0 / 1): \n");
     scanf("%d", &io_burst);
     if (io_burst) {
-        for (int i = 0; i < algo_num; ++i) {
+        for (int i = 0; i < algo_num-2; ++i) {
             pinfos_copies[i][0]->io_burst_intime = 1; // 첫번째 process에 대해서만, cpu burst하고 1초 뒤 I/O burst
             pinfos_copies[i][0]->io_how_much_left = pinfos_copies[i][0]->how_much_left - 1;//I/O burst time = CPU burst time - 1
         }
